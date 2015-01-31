@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<!--
+Name:   netchord.html
+Goal:   create visual insight into QRadar Network flow distribution.
+HowTo:  in CLI: scp netchord.html root@[qra-ip]:/opt/qradar/www/.
+HowTo:  in browser: https://[qra-ip]/netchord.html
+Author: Nico de Smidt / nds at nl dot ibm dot com
+ -->
+<meta charset="utf-8">
+<title>netChord</title>
+<style>
+
+@import url(style.css);
+@media screen and (min-aspect-ratio: 1/1) {
+
+#circle circle {
+fill: none;
+pointer-events: all;
+} 
+.group path {
+fill-opacity: .5;
+}
+path.chord {
+stroke: #000;
+stroke-width: .25px;
+}
+ 
+#circle:hover path.fade {
+display: none;
+}
+.node {
+  font-size: 12px;
+}
+.node:hover {
+  fill: #1f77b4;
+}
+.node.target {
+  fill: #d62728 !important;
+}
+.link.source {
+  stroke: #d62728;
+}
+.node.source {
+  fill: #2ca02c;
+}
+.link.target {
+  stroke: #2ca02c;
+}
+}
+progress[value] {
+  /* Reset the default appearance */
+  -webkit-appearance: none;
+     -moz-appearance: none;
+          appearance: none;
+  
+  /* Get rid of default border in Firefox. */
+  border: none;
+  
+  /* Dimensions */
+  width: 250px;
+  height: 20px;
+}
+
+</style>
+<progress id=p value=0></progress> 
+<h1></h1> 
+<p>Built with <a href="http://d3js.org/">d3.js</a>.</aside>
+<!--<script src="http://d3js.org/d3.v3.min.js" charset="utf-8"></script>-->
+<script src="file:///home/via2326/Desktop/d3.min.js" charset="utf-8"></script>
+<!--<script src="d3.min.js" charset="utf-8"></script>-->
+<script>
+
+// modify to match your configuration --------------------
+// get a QRadar SEC auth token admin->authorized services
+var auth_token ="d84fcc0b-7528-4563-87b6-04dd6909f0ac" ;
+// the QRadar REST API endpoint
+var qrhost="https://172.16.60.150/api/";
+// AQL query expression, should return NSS,NDD,traffic (IP,IP,double)
+var qrq="select NETWORKNAME(sourceip) as NNS,NETWORKNAME(destinationip) as NND,sum((sourcebytes+destinationbytes)/1024) as traffic from flows group by NND,NNS order by NNS,NND LAST 1 MINUTES";
+// do not modify below this line -------------------------
+
+var qrapi="ariel/searches?query_expression=";
+
+var testdata={flows:[
+    {
+      "NNS": "Building_2",
+      "NND": "DNS",
+      "traffic": "33.634765625"
+    },
+    {
+      "NNS": "Building_2",
+      "NND": "other",
+      "traffic": "30.2646484375"
+    },
+    {
+      "NNS": "Building_3",
+      "NND": "DNS",
+      "traffic": "23.6123046875"
+    },
+    {
+      "NNS": "Server_Network",
+      "NND": "VPN_Addresses_Space",
+      "traffic": "0.158203125"
+    },
+    {
+      "NNS": "Users-2",
+      "NND": "External",
+      "traffic": "35.8125"
+    },
+    {
+      "NNS": "Users-2",
+      "NND": "Mail",
+      "traffic": "35.78515625"
+    },
+    {
+      "NNS": "Users-2",
+      "NND": "Server_Network",
+      "traffic": "51.40625"
+    },
+    {
+      "NNS": "Users-2",
+      "NND": "other",
+      "traffic": "75.779296875"
+    },
+    {
+      "NNS": "VPN_Addresses_Space",
+      "NND": "Development",
+      "traffic": "17.869140625"
+    },
+    {
+      "NNS": "other",
+      "NND": "VPN_Addresses_Space",
+      "traffic": "2.4072265625"
+    }
+  ]};
+
+
+
+//make this global
+var qrqurl=qrhost+qrapi+encodeURIComponent(qrq);
+var IDQRadarTimer,IDQRadarMainTimer;
+var progressBar = document.getElementById("p")
+var y = new Array();
+var z;
+var heartBeat;
+var test=true; // set to true to do tests without an actual QRadar instance present
+var firstTime=true;
+
+
+// MAIN
+setupHeartBeat();
+
+//set false for local test set
+//} else {qrprocess(testdata);}
+
+function setupHeartBeat() {
+	progressBar.max = 100;
+	progressBar.value = 100;
+	timer="run()";
+	IDQRadarMainTimer=setInterval(timer,1000);
+}
+
+function run() {
+console.log(progressBar.value);
+if (progressBar.value>=10) {
+	var w=(progressBar.value)-10;
+	console.log(progressBar.value);
+	progressBar.value = w;
+} else {
+	clearInterval(IDQRadarMainTimer);
+	if (test=true) {
+		qrprocess(testdata);
+	} else {
+		d3.json(qrqurl)
+		    .header("Accept", "application/json")
+		    .header("Version", "3.0")
+		    .header("SEC", auth_token)
+		    .post(function(error,data) {query(error,data)});
+	}
+}
+}
+/*######################*/
+
+function query(error, data) {// callback after query post
+	timer="check('"+data.search_id+"')";
+	IDQRadarTimer=setInterval(timer,2000);
+    };
+
+function check(qrsid) {
+	url=qrhost+"ariel/searches/"+qrsid;
+	d3.json(url)
+    		.header("Accept", "application/json")
+		.header("Version", "3.0")
+		.header("SEC", auth_token)
+		.get(function(error, url) {// callback after query return
+//			console.log(url.progress);
+      			progressBar.value = url.progress;
+			if (url.status=="COMPLETED") {
+				clearInterval(IDQRadarTimer);
+				IDQRadarTimer=null
+				qrqretrieve(qrsid)
+			;}
+		});
+	};
+
+function qrqretrieve(qrqrid) {
+	console.log("start retrieve()"+qrqrid);
+	url=qrhost+"ariel/searches/"+qrqrid+"/results";
+	d3.json(url)
+    		.header("Accept", "application/json")
+		.header("Version", "3.0")
+		.header("SEC", auth_token)
+		.get(function(error, qrresponse) {
+			// callback after result return
+			qrprocess(qrresponse);
+		});
+};
+
+
+function qrprocess(res) {
+	for (name in res) {
+  	if (res.hasOwnProperty(name)) {
+	  }
+	}
+
+var resultArray = res[name]
+var x = [];
+var b = [];
+
+for (var prop in resultArray) {
+//console.log("X "+resultArray[prop].NNS);
+x.push(resultArray[prop].NNS);
+x.push(resultArray[prop].NND);
+}
+
+z=d3.map(d3.set(x).values().sort()).values();
+//console.log("y"+window.innerHeight);
+//console.log("x"+window.innerWidth);
+
+//create matrix
+  for (var i = 0; i < z.length; i++) {
+    y[i] = new Array(z.length).fill(0);
+  }
+
+//fill matrix
+for (var prop in resultArray) {
+	y[z.indexOf(resultArray[prop].NNS)][z.indexOf(resultArray[prop].NND)]=parseFloat(resultArray[prop].traffic);
+	};
+drawChord();
+}
+
+function drawChord() {
+if (firstTime==true) {console.log("1st time");firstTime=false;}
+//modify to scale with viewport
+var width = window.innerWidth;
+var height = window.innerHeight;
+if (width<=height) {height=width;} else {width=height;}
+
+outerRadius = Math.min(width, height) / 3,
+innerRadius = outerRadius - 24;
+  
+var arc = d3.svg.arc()
+.innerRadius(innerRadius)
+.outerRadius(outerRadius);
+ 
+var layout = d3.layout.chord()
+.padding(.04)
+.sortSubgroups(d3.descending)
+.sortChords(d3.ascending);
+layout.matrix(y);
+ 
+var path = d3.svg.chord()
+.radius(innerRadius);
+ 
+var svg = d3.select("body").append("svg")
+.attr("width", width)
+.attr("height", height)
+.append("g")
+.attr("id", "circle")
+.attr("transform", "translate(" + width/2 + "," + height/2 + ")");
+ 
+svg.append("circle")
+.attr("r", outerRadius);
+ 
+// Add a group per neighborhood.
+var group = svg.selectAll(".group")
+.data(layout.groups)
+.enter().append("g")
+.attr("class", "group")
+.on("mouseover", mouseoverlink);
+ 
+// Add a mouseover title.
+ group.append("title").text(function(d, i) {
+//	console.log(z[i]);
+ return z[i]; });
+ 
+//pick a fill color
+var fill = d3.scale.category20b();
+
+ry=height/2;
+
+// Add the group arc.
+var groupPath = group.append("path")
+.attr("id", function(d, i) { return "group" + i; })
+.attr("d", arc)
+.style("fill", function(d) {return d.index < 4 ? '#444444' : fill(d.index)});
+//.style("fill", function(d) {return fill(d.index)});
+
+r1 = height/2.7;
+
+// Add a text label.
+var groupText = group.append("text")
+    .attr("x", 0)
+    .attr("y", 0)
+    .attr("text-anchor", function(d) { return ((d.startAngle + d.endAngle) / 2) > Math.PI ? "end" : null; })
+            .attr("transform", function(d) {
+              return "rotate(" + (((d.startAngle + d.endAngle) / 2) * 180 / Math.PI - 90) + ")"
+                  + "translate(" + (r1 - 15) + ")"
+                  + (((d.startAngle + d.endAngle) / 2) > Math.PI ? "rotate(180)" : "")
+            })
+    .attr("class", "node")
+    .text(function(d,i) { return z[i]; })
+    .on("mouseover", mouseover)
+    .on("mouseout", mouseout);
+
+// Add the chords.
+var chord = svg.selectAll(".chord")
+.data(layout.chords)
+.enter().append("path")
+.attr("class", "chord")
+.style("fill", function(d,i) {return i < 4 ? '#444444' : fill(i)})
+.attr("d", path);
+
+// done, restart heartBeat
+setupHeartBeat();
+
+function mouseover(d) {
+  svg.selectAll("path.link.target-" + d.key)
+      .classed("target", true)
+//      .each(updateNodes("source", false));
+  svg.selectAll("path.link.source-" + d.key)
+      .classed("source", true)
+}
+
+function mouseout(d) {
+  svg.selectAll("path.link.source-" + d.key)
+      .classed("source", false)
+
+  svg.selectAll("path.link.target-" + d.key)
+      .classed("target", false)
+}
+
+function mouseoverlink(d, i) {
+   chord.classed("fade", function(p) {
+	return p.source.index != i
+	&& p.target.index != i;
+	});
+} 
+
+
+}
+
+
+//window.onresize = function() {
+//console.log("resize "+window.innerHeight);
+//    var tehdiv = document.getElementById('circle');
+//	tehdiv.height = (window.innerHeight/2);
+//};
+
+
+</script>
+  
+<footer>
+</footer>
